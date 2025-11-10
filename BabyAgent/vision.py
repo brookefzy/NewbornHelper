@@ -226,48 +226,39 @@ def extract_frames(
     start_sec: float = 0.0,
     end_sec: Optional[float] = None,
 ):
-    """Save frames every `interval_sec` seconds, limited to [start_sec, end_sec]."""
-
     ensure_clean_dir(FRAME_FOLDER)
-
-    safe_start = max(0.0, float(start_sec or 0.0))
-    safe_end = float(end_sec) if end_sec is not None else None
-    if safe_end is not None and safe_end <= safe_start:
-        print(
-            "End timestamp must be greater than start; processing full video instead."
-        )
-        safe_end = None
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print("Error opening video file")
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_skip = max(1, int(fps * interval_sec))
+    safe_start = max(0.0, float(start_sec or 0.0))
+    safe_end = float(end_sec) if end_sec is not None else None
 
-    if safe_start:
-        cap.set(cv2.CAP_PROP_POS_MSEC, safe_start * 1000)
-
-    pos_frames = cap.get(cv2.CAP_PROP_POS_FRAMES)
-    start_frame_idx = int(pos_frames) if pos_frames > 0 else int(safe_start * fps)
-    frame_idx = 0
-
+    t = safe_start
+    idx = 0
     while True:
-        current_frame = start_frame_idx + frame_idx
-        current_time = current_frame / fps if fps else 0.0
-        if safe_end is not None and current_time >= safe_end:
+        if safe_end is not None and t > safe_end:
             break
-
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
         ok, frame = cap.read()
         if not ok:
             break
 
-        if frame_idx % frame_skip == 0:
-            out_path = os.path.join(FRAME_FOLDER, f"frame_{current_frame:07d}.jpg")
-            cv2.imwrite(out_path, frame)
-            print(f"Saved {out_path}")
-        frame_idx += 1
+        # Optional: normalize size for stable tokens
+        h, w = frame.shape[:2]
+        target_w = 480
+        if w > target_w:
+            scale = target_w / w
+            frame = cv2.resize(
+                frame, (target_w, int(h * scale)), interpolation=cv2.INTER_AREA
+            )
+
+        out_path = os.path.join(FRAME_FOLDER, f"frame_{int(t*1000):010d}.jpg")
+        cv2.imwrite(out_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 92])  # fixed quality
+        idx += 1
+        t += interval_sec
 
     cap.release()
     cv2.destroyAllWindows()
@@ -288,6 +279,7 @@ def transcribe_audio(audio_path: str) -> str:
                 model="gpt-4o-transcribe",
                 file=af,
                 prompt=TRANSCRIPTION_PROMPT,
+                temperature=0.1,
             )
         return resp.text
     except Exception as e:
@@ -374,6 +366,10 @@ def analyze_frames_with_responses(
     # 2) Chat Completions payload (text + image_url)
     chat_messages = [
         {
+            "role": "system",
+            "content": "You are a careful pediatric behavior analyst. Follow the rubric exactly. Use <=150 words.",
+        },
+        {
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt_text},
@@ -390,7 +386,7 @@ def analyze_frames_with_responses(
                     for b64 in frames
                 ),
             ],
-        }
+        },
     ]
 
     # Try Responses API first
@@ -400,6 +396,7 @@ def analyze_frames_with_responses(
             model="gpt-4.1-mini",  # or gpt-4o / gpt-4o-mini
             input=[{"role": "user", "content": responses_content}],
             max_output_tokens=300,
+            temperature=0.1,
         )
         # Print best-effort text extraction
         if hasattr(resp, "output_text") and resp.output_text:
@@ -421,9 +418,11 @@ def analyze_frames_with_responses(
 
     # Chat Completions Vision (widely available)
     resp = client.chat.completions.create(
-        model="gpt-4o-mini",  # vision-capable chat model
+        model="gpt-4.1",  # vision-capable chat model
         messages=chat_messages,
         max_tokens=300,
+        temperature=0.1,
+        top_p=1,
     )
     print(resp.choices[0].message.content)
 
