@@ -1,0 +1,25 @@
+# Environment and secrets
+.env
+credentials.json
+token.json
+google_drive_personal.json
+gmail_oauth_client.json
+gmail_token.json
+client_secret.json
+client_secret_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Temp/intermediate artifacts
+.tmp/*
+!.tmp/.gitkeep
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
